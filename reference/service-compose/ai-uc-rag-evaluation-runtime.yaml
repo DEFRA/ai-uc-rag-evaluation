@@ -1,0 +1,34 @@
+services:
+  ai-uc-rag-evaluation-runtime:
+    build:
+      context: ../repos/ai-uc-rag-evaluation-runtime
+      target: development
+    container_name: runtime
+    ports:
+      - 8085:8085
+    links:
+      - "localstack:localstack"
+      - "mongodb:mongodb"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+    env_file:
+      - "../.env"
+    environment:
+      PORT: ${PORT:-8085}
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017/}
+      HOST: ${HOST:-0.0.0.0}
+      LOCALSTACK_URL: ${LOCALSTACK_URL}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      SQS_ENDPOINT_URL: ${SQS_ENDPOINT_URL}
+    volumes:
+      - ../repos/ai-uc-rag-evaluation-runtime/app:/home/nonroot/app
+    develop:
+      watch:
+        - action: rebuild
+          path: ../repos/ai-uc-rag-evaluation-runtime/pyproject.toml
+          target: /home/nonroot/pyproject.toml
+    networks:
+      - ai-uc-rag-evaluation
