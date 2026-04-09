@@ -149,7 +149,7 @@ The services can still be started individually directly from their respective re
 
 ## Network
 
-All services run on a shared Docker network named `ai-uc-content-swarm` to enable inter-service communication.
+All services run on a shared Docker network named `ai-uc-rag-evaluation` to enable inter-service communication.
 
 ## Script Documentation
 
