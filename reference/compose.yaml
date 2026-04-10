@@ -1,0 +1,86 @@
+name: ai-uc-rag-evaluation
+
+include:
+  - ./service-compose/ai-uc-rag-evaluation-ui.yaml
+  - ./service-compose/ai-uc-rag-evaluation-runtime.yaml
+  - ./service-compose/ai-uc-rag-evaluation-data.yaml
+  - ./dependencies/cdp-uploader.yaml
+services:
+  localstack:
+    image: localstack/localstack:4.9.2
+    ports:
+      - 4566:4566
+      - 4510-4559:4510-4559
+    environment:
+      DEBUG: ${DEBUG:-1}
+      LS_LOG: WARN
+      SERVICES: s3,sqs,sns,firehose
+      LOCALSTACK_HOST: 127.0.0.1
+      AWS_REGION: eu-west-2
+      AWS_DEFAULT_REGION: eu-west-2
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - ${TMPDIR:-/tmp}/localstack:/var/lib/localstack
+      - ./repos/ai-uc-rag-evaluation-runtime/compose/start-localstack.sh:/etc/localstack/init/ready.d/01-runtime-start-localstack.sh
+      - ./repos/ai-uc-rag-evaluation-data/compose/start-localstack.sh:/etc/localstack/init/ready.d/02-data-start-localstack.sh
+      - ./localstack/cdp-uploader.sh:/etc/localstack/init/ready.d/02-cdp-uploader.sh
+      - ./localstack/99-ready.sh:/etc/localstack/init/ready.d/99-ready.sh
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - "curl -s localhost:4566 && cat /tmp/READY"
+      interval: 5s
+      start_period: 30s
+      retries: 15
+    networks:
+      - ai-uc-rag-evaluation
+      - cdpuploader
+  mongodb:
+    image: mongo:6.0.13
+    networks:
+      - ai-uc-rag-evaluation
+    ports:
+      - 27017:27017
+    volumes:
+      - mongodb-data:/data
+  redis:
+    image: redis:7.2.3-alpine3.18
+    ports:
+      - 6379:6379
+    networks:
+      - ai-uc-rag-evaluation
+      - cdpuploader
+  postgres:
+    build:
+      context: ${COMPOSE_PROJECT_DIR:-.}
+      dockerfile: pgvector.Dockerfile
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      start_period: 5s
+      retries: 3
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ppp}
+      POSTGRES_SSL_MODE: ${POSTGRES_SSL_MODE:-disable}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+    networks:
+      - ai-uc-rag-evaluation
+volumes:
+  mongodb-data:
+  postgres-data:
+networks:
+  ai-uc-rag-evaluation:
+    name: ai-uc-rag-evaluation
+    driver: bridge
+  cdpuploader:
+    driver: bridge

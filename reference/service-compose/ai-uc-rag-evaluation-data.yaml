@@ -1,0 +1,54 @@
+x-common-postgres: &common-postgres
+  POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+  POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ppp}
+  POSTGRES_SSL_MODE: ${POSTGRES_SSL_MODE:-disable}
+  POSTGRES_DB: ${POSTGRES_DB:-ai_uc_rag_evaluation_data}
+
+services:
+  ai-uc-rag-evaluation-data-migrator:
+    build:
+      context: ../dependencies/migrator
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *common-postgres
+    volumes:
+      - ../repos/ai-uc-rag-evaluation-data/changelog:/liquibase/changelog
+    networks:
+      - ai-uc-rag-evaluation
+
+  ai-uc-rag-evaluation-data:
+    build:
+      context: ../repos/ai-uc-rag-evaluation-data
+      target: development
+    container_name: data
+    ports:
+      - 8086:8086
+    links:
+      - "localstack:localstack"
+      - "mongodb:mongodb"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      ai-uc-rag-evaluation-data-migrator:
+        condition: service_completed_successfully
+    env_file:
+      - "../.env"
+    environment:
+      <<: *common-postgres
+      PORT: ${PORT:-8086}
+      MONGO_URI: ${MONGO_URI:-mongodb://mongodb:27017/}
+      HOST: ${HOST:-0.0.0.0}
+    volumes:
+      - ../repos/ai-uc-rag-evaluation-data/app:/home/nonroot/app
+    develop:
+      watch:
+        - action: rebuild
+          path: ../repos/ai-uc-rag-evaluation-data/pyproject.toml
+          target: /home/nonroot/pyproject.toml
+    networks:
+      - ai-uc-rag-evaluation

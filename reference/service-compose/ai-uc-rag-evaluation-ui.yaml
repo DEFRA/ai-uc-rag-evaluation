@@ -1,0 +1,28 @@
+services:
+  ai-uc-rag-evaluation-ui:
+    build:
+      target: development
+      context: ../repos/ai-uc-rag-evaluation-ui
+    container_name: ui
+    ports:
+      - '3000:3000'
+    links:
+      - "localstack:localstack"
+      - 'redis:redis'
+    depends_on:
+      localstack:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - "../.env"
+    volumes:
+      - ../repos/ai-uc-rag-evaluation-ui/src/:/home/node/src
+      - ../repos/ai-uc-rag-evaluation-ui/package.json:/home/node/package.json
+    environment:
+      PORT: 3000
+      NODE_ENV: development
+      REDIS_HOST: redis
+      USE_SINGLE_INSTANCE_CACHE: true
+    networks:
+      - ai-uc-rag-evaluation
