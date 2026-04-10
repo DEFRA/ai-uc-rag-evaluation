@@ -1,180 +1,164 @@
-# RAG Evaluation System - Reference Implementation
-
-This directory contains the Docker Compose orchestration and scripts for running a complete RAG (Retrieval-Augmented Generation) evaluation system locally. The system uses LLM-as-a-judge evaluation to systematically assess the quality of retrieval-augmented generation pipelines.
-
-## Architecture Overview
-
-The RAG evaluation system consists of three microservices:
-
-1. **Data Service** - Knowledge ingestion, embedding generation, and vector storage
-2. **Runtime Service** - Evaluation orchestration with LLM-based judging and SQS queue processing
-3. **UI Service** - Web dashboard for knowledge management and evaluation workflows
-
-### System Context
-
-```mermaid
-flowchart LR
-    User(["👤 User"])
-    System["<b>RAG Evaluation<br/>System</b>"]
-    
-    User -->|"HTTPS"| System
-```
-
-### Service Communication
-
-```mermaid
-flowchart LR
-    subgraph Services ["Application Services"]
-        UI["<b>UI Service</b><br/>Node.js / Hapi.js<br/>─────────────────<br/>Knowledge management<br/>Evaluation dashboard"]
-        Data["<b>Data Service</b><br/>Python / FastAPI<br/>─────────────────<br/>Ingestion & embeddings<br/>Vector query API"]
-        Runtime["<b>Runtime Service</b><br/>Python / FastAPI<br/>─────────────────<br/>Orchestration<br/>LLM-as-a-judge"]
-    end
-    
-    UI -->|"REST"| Data
-    UI -->|"REST"| Runtime
-    Runtime -->|"REST — fetch chunks"| Data
-```
-
-### Data & External Integrations
-
-```mermaid
-flowchart TD
-    Data["<b>Data Service</b>"]
-    Runtime["<b>Runtime Service</b>"]
-    
-    subgraph Storage["Data Stores"]
-        PG[("<b>PostgreSQL + pgvector</b><br/>Knowledge chunks<br/>& embeddings")]
-        Mongo[("<b>MongoDB</b><br/>Evaluation runs<br/>& results")]
-        S3[("<b>Object Storage</b><br/>S3 / LocalStack<br/>Documents & snapshots")]
-    end
-    
-    subgraph AWS["AWS Services"]
-        Bedrock["<b>AWS Bedrock</b><br/>LLM inference<br/>Embeddings"]
-        SQS["<b>AWS SQS</b><br/>Job queue"]
-    end
-    
-    Data -->|"SQL"| PG
-    Data -->|"AWS SDK"| S3
-    Runtime -->|"Query"| Mongo
-    Data -->|"AWS SDK"| Bedrock
-    Runtime -->|"AWS SDK"| Bedrock
-    Runtime -->|"AWS SDK"| SQS
-```
-
-## Prerequisites
-
-- Docker
-- Docker Compose
-- Amazon Bedrock credentials and access to create inference profiles and guardrails
-- uv - [Installation Guide](https://docs.astral.sh/uv/getting-started/installation/#installing-uv)
-- Python 3.13 or higher - We recommend using uv to manage your Python environment
-- Node.js 24 or higher - Required for the UI service
-- Git
-- AWS credentials with permissions for Bedrock, SQS, and S3
-
-## Repositories
-
-| Service | Description | Type | Language |
-|---------|-------------|------|----------|
-| [ai-uc-rag-evaluation-data](https://github.com/DEFRA/ai-uc-rag-evaluation-data) | Knowledge ingestion, embedding, vector storage | Backend API | Python |
-| [ai-uc-rag-evaluation-runtime](https://github.com/DEFRA/ai-uc-rag-evaluation-runtime) | Evaluation orchestration, LLM judge, queue processing | Backend API | Python |
-| [ai-uc-rag-evaluation-ui](https://github.com/DEFRA/ai-uc-rag-evaluation-ui) | Web dashboard for system management | Frontend | JavaScript |
-
-## Local Development
-
-### Prerequisites Check
-
-Before proceeding, verify your environment is set up:
-
-```bash
-docker --version
-docker-compose --version
-python3 --version  # Should be 3.13 or higher
-node --version     # Should be 24 or higher
-uv --version
-```
-
-### Getting Started
-
-Clone this repository and sync the environment:
-
-```bash
-git clone https://github.com/DEFRA/ai-uc-rag-evaluation
-cd ai-uc-rag-evaluation
-uv sync --frozen
-```
-
-### Cloning Service Repositories
-
-This project includes a script that automatically clones all required service repositories into the `repos/` directory by checking the service composition definitions:
-
-```bash
-uv run task clone
-```
-
-Your service repositories will be located in the `repos/` directory.
-
-### Environment Configuration
-
-This repository uses a `.env` file for environment variable configuration. This must be created for the Docker Compose project to start.
+# ai-uc-rag-evaluation
+This repository contains a reference implementation for the AICE RAG Evaluation reusable pattern.
 
 > [!IMPORTANT]
-> The `.env` file should not be committed to version control. Add it to your `.gitignore` file to keep sensitive configuration data secure.
+> This is a reference implementation that can be productionised. However, when running this system in **local development or lower environments**, you **must only use publicly available and/or mocked data sources**. Do not use sensitive, proprietary, or production data in non-production deployments.
+>
+> For local setup instructions, see [docs/local-development.md](docs/local-development.md).
 
-Copy the example environment file to create your own:
+## RAG Evaluation Overview
 
-```bash
-cp .env.example .env
+### The problem statement
+
+Knowledge bases that power RAG (Retrieval-Augmented Generation) systems are not static — they are updated over time as policy, guidance, or source material changes. Each update carries risk: new content can contradict existing knowledge, introduce factual errors, or cause a previously correct RAG system to return wrong answers.
+
+The example is straightforward: if a knowledge base correctly states that the capital of France is Paris, adding a document that incorrectly states it is London may cause a RAG system to return the wrong answer. Manual checks after ingestion cannot realistically catch every such conflict, especially at scale.
+
+The current process looks like this:
+
+```mermaid
+flowchart LR
+    KM["👤 Knowledge\nManager"]
+    ADD["Add\nContent"]
+    ING["Ingest &\nCreate Snapshot"]
+    MANUAL["Manual\nVerification"]
+    ACT["Activate\nSnapshot"]
+    USER["👤 User"]
+
+    KM -->|Upload document| ADD
+    ADD --> ING
+    ING --> MANUAL
+    MANUAL -->|Approve| ACT
+    ACT --> USER
+
+    style KM fill:#4a90e2,stroke:#2e5c8a,stroke-width:2px,color:#fff
+    style MANUAL fill:#e74c3c,stroke:#c0392b,stroke-width:2px,color:#fff
+    style USER fill:#4a90e2,stroke:#2e5c8a,stroke-width:2px,color:#fff
+    style ADD fill:#f5f5f5,stroke:#999,stroke-width:2px,color:#000
+    style ING fill:#f5f5f5,stroke:#999,stroke-width:2px,color:#000
+    style ACT fill:#f5f5f5,stroke:#999,stroke-width:2px,color:#000
 ```
 
-### Starting the Services
+This manual verification step is the critical bottleneck: it does not scale, it cannot be comprehensive, and it provides no automated regression capability — meaning there is no reliable way to catch regressions introduced by subsequent updates.
 
-A single docker-compose project has been created that orchestrates all microservices, dependencies, and performs any necessary setup tasks such as database migrations.
+### Our approach
 
-All configuration is stored in the `.env` file. Before starting the services, ensure that the `.env` file is correctly configured. The services will use default values if no `.env` file is present.
+This implementation applies the **LLM-as-a-Judge** evaluation pattern to automate regression testing of knowledge base updates. Before a new snapshot is activated, a predetermined set of questions is run through the RAG system and the answers are scored against known ground truths by an LLM judge. This provides a repeatable, scalable quality gate that does not depend on manual review.
 
-To start all services, run the following command:
+There are three key design decisions in this implementation:
 
-```bash
-docker-compose up --build
+**LLM-as-a-Judge over statistical metrics.** RAG responses are generative — the same correct answer can be phrased in many different ways. Statistical metrics such as exact match or BLEU score cannot capture semantic equivalence. Prior research spikes concluded that LLM-as-a-Judge is the most effective metric for evaluating generative AI responses against a known ground truth. Among the tools evaluated, [pydantic-ai](https://ai.pydantic.dev/)'s `LLMJudge` implementation performed best.
+
+**Asynchronous evaluation via SQS.** Running a full evaluation suite — executing RAG searches and LLM judgements across multiple questions, rubrics, and models — is a long-running workload. A synchronous API would time out before completion. The system decouples submission from execution: an evaluation run is enqueued on SQS, processed asynchronously by a background worker, and results are retrieved by polling. This design prevents timeouts and allows multiple evaluations to run concurrently without blocking the UI.
+
+**Multi-model, multi-rubric evaluation.** The quality of an LLM judgement depends on both the judge model and the rubric (the scoring prompt). By running each question across multiple model-rubric combinations, the system enables direct comparison of judgement quality — which is itself valuable evidence for selecting the right judge configuration for a given use case.
+
+### The system design
+
+#### Diagram
+
+```mermaid
+graph LR
+    UC["User Request\n& Evaluation Config"]
+
+    UI["UI Service\n🖥️ Knowledge Management\n& Evaluation Dashboard"]
+
+    SQS["SQS Queue\n📋 Async Job Queue"]
+
+    RT["Runtime Service\n⚙️ Orchestration\n& LLM Judge"]
+
+    DS["Data Service\n📚 RAG Search\n& Vector Store"]
+
+    RESULTS["Results\n📊 Scores per\nModel & Rubric"]
+
+    UC -->|Submit evaluation| UI
+    UI -->|Enqueue job| SQS
+    SQS -->|Process| RT
+    RT -->|"Fetch relevant chunks"| DS
+    RT -->|Persist scores| RESULTS
+    RESULTS -->|Poll / view| UC
+
+    style UC fill:#4a90e2,stroke:#2e5c8a,stroke-width:2px,color:#fff
+    style UI fill:#7ed321,stroke:#5a9d1f,stroke-width:2px,color:#000
+    style SQS fill:#f5a623,stroke:#d68910,stroke-width:2px,color:#000
+    style RT fill:#50e3c2,stroke:#2d8a7d,stroke-width:2px,color:#000
+    style DS fill:#f8e71c,stroke:#c0a000,stroke-width:2px,color:#000
+    style RESULTS fill:#e8e8e8,stroke:#999,stroke-width:2px,color:#000,stroke-dasharray: 5 5
 ```
 
-To stop the services, run the following command:
+#### Service roles and responsibilities
 
-```bash
-docker-compose down
-```
+The system is composed of three microservices, each with a distinct role:
 
-The services can still be started individually directly from their respective repositories. However, this project is intended to streamline local development by having a common entry point for all services.
+| Service | Role | Tech |
+|---|---|---|
+| UI Service | Web dashboard — knowledge management, evaluation configuration, and results viewing | Node.js / Hapi.js |
+| Data Service | Knowledge ingestion, embedding generation, vector storage, and RAG search API | Python / FastAPI |
+| Runtime Service | Evaluation orchestration, SQS queue listener, and LLM-as-a-judge execution | Python / FastAPI |
 
-## Network
+The **UI Service** is the entry point for users. It provides the interface for uploading and managing knowledge sources, configuring evaluation datasets, submitting evaluation runs, and viewing results.
 
-All services run on a shared Docker network named `ai-uc-rag-evaluation` to enable inter-service communication.
+The **Data Service** manages the knowledge layer. It handles document ingestion and chunking, generates vector embeddings via Amazon Bedrock, stores them in PostgreSQL with pgvector, and exposes a RAG search API consumed by the Runtime Service during evaluation.
 
-## Script Documentation
+The **Runtime Service** is the evaluation engine. It receives evaluation requests via REST, enqueues jobs to SQS, and runs a background queue listener that executes the full evaluation loop: RAG search via the Data Service, followed by LLM-as-a-judge scoring across all configured model-rubric combinations. Results are persisted to MongoDB.
 
-This project contains a number of scripts to streamline local microservice development.
+## Reference Implementation
 
-### Clone
+The reference implementation is stored in the `reference/` folder, which contains the scripts, configurations, and Docker Compose setup needed to clone and run all the microservices. The actual service repositories are pulled from GitHub during setup using the provided scripts.
 
-Clones the repositories for each microservice into the parent directory.
+### Directory Structure
 
-```bash
-uv run task clone
-```
+The key folders within `reference/` are:
 
-### Pull
+- **`repos/`** — Location where the microservice repositories are cloned during setup:
+  - `ai-uc-rag-evaluation-data/` — Data Service (Python): knowledge ingestion, embeddings, vector storage, and RAG search API
+  - `ai-uc-rag-evaluation-runtime/` — Runtime Service (Python): evaluation orchestration, LLM-as-a-judge, and SQS queue processing
+  - `ai-uc-rag-evaluation-ui/` — UI Service (JavaScript): web dashboard for knowledge management and evaluation workflows
+- **`service-compose/`** — Docker Compose service definitions for each microservice
+- **`dependencies/`** — Supporting service configurations (CDP uploader, database migrator)
+- **`localstack/`** — Docker-based local AWS services setup (S3, SQS) with initialisation scripts
+- **`scripts/`** — Utilities for cloning, pulling, and updating service repositories
+- **`compose.yaml`** — Orchestrates the complete stack using Docker Compose
 
-Pulls the latest remote changes for each microservice.
+For detailed setup and deployment instructions, see [docs/local-development.md](docs/local-development.md).
 
-```bash
-uv run task pull
-```
+### Tech Stack
 
-### Update
+- [Pydantic AI](https://ai.pydantic.dev/) — LLM-as-a-judge execution via `LLMJudge`, Bedrock model integration
+- [Amazon Bedrock](https://aws.amazon.com/bedrock/) — LLM inference for evaluation and vector embedding generation
+- [Anthropic Claude](https://www.anthropic.com/claude) — Primary judge model family
+- [PostgreSQL + pgvector](https://github.com/pgvector/pgvector) — Vector storage for knowledge chunks and embeddings
+- [MongoDB](https://www.mongodb.com/) — Evaluation run and result persistence
+- [AWS SQS](https://aws.amazon.com/sqs/) — Async job queue for evaluation runs
 
-Switches to and pulls the latest main branch for each microservice.
+### Model Configuration
 
-```bash
-uv run task update
-```
+| Component | Model | Rationale |
+|---|---|---|
+| Embedding | Amazon Titan Embed Text v2 | Efficient, cost-effective embedding generation for knowledge chunks |
+| LLM Judge | Claude 3 Haiku | Fast, lower-cost judge — useful for high-volume evaluation sweeps |
+| LLM Judge | Claude 3 Sonnet | Balanced quality and cost for standard evaluation runs |
+| LLM Judge | Claude 3.7 Sonnet | Higher-quality judge for validating rubrics and benchmarking |
+| LLM Judge | GPT-OSS 120B | Large open-source model for cross-vendor judgement comparison |
+| LLM Judge | GPT-OSS 20B | Smaller open-source model for cost-efficient cross-vendor comparison |
+
+The system supports multiple judge models simultaneously. Running the same evaluation across different models allows teams to compare judgement consistency and identify which model-rubric combination produces the most reliable scores for their use case.
+
+## Evaluation Deep-Dive
+
+For detailed breakdowns of the evaluation flow, async processing design, and data model, see:
+
+- [docs/evaluation-flow.md](docs/evaluation-flow.md) — End-to-end evaluation lifecycle, async SQS processing, deduplication, and multi-model execution
+- [docs/knowledge-and-evaluation-data.md](docs/knowledge-and-evaluation-data.md) — Breakdown of knowledge snapshots, evaluation datasets, and results storage
+
+## Further Information
+
+This pattern was developed following two initial research spikes that evaluated different approaches to LLM validation and evaluation metrics:
+
+- [ai-spike-llm-validation](https://github.com/DEFRA/ai-spike-llm-validation) — Investigated approaches to validating LLM-generated responses, establishing LLM-as-a-judge as the most effective metric
+- [ai-spike-evaluation-metrics](https://github.com/DEFRA/ai-spike-evaluation-metrics) — Evaluated specific tooling and frameworks, identifying pydantic-ai's `LLMJudge` as the best-performing implementation
+
+For the broader technical pattern documentation, including the rubric design guidance and evaluation methodology:
+
+- [ai-tech-pattern-llm-as-a-judge](https://github.com/DEFRA/ai-tech-pattern-llm-as-a-judge) — The reusable pattern this reference implementation proves out
+- [ai-tech-pattern-ai-frameworks](https://github.com/DEFRA/ai-tech-pattern-ai-frameworks) — The broader pattern library for AI development with guidance on recommended frameworks
